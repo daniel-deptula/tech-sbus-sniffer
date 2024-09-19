@@ -16,7 +16,15 @@ class EnvData:
     def read_data_from_msg(self):
         i = 0
         while i+4 < len(self.msg):
-            if self.msg[i:i+3] == bytes([4, 0, 0]):
+            if self.msg[i:i+4] == bytes([0xAC, 0xFF, 0xFF, 0xAC]):
+                # Controller's ACK (bytes 0xAC, 0xFF, 0xFF, 0xAC followed by CRC-32 of measurement data received from sensor)
+                if logger.getEffectiveLevel() <= logging.DEBUG:
+                    crc32 = ""
+                    if i+7 < len(self.msg):
+                        crc32 = self.msg[i+4:i+8].hex(' ')
+                    logger.debug("Controller's ACK. CRC32: " + crc32)
+                break
+            elif self.msg[i:i+3] == bytes([4, 0, 0]):
                 # Room temperature
                 self.room_temp = float(int.from_bytes(self.msg[i+3:i+5], byteorder='little', signed=False))/10
                 logger.debug("Room temperature: "+str(self.room_temp))
@@ -68,7 +76,7 @@ if __name__ == "__main__":
     
     with serial.Serial(port, 115200, parity=serial.PARITY_EVEN, bytesize=serial.SEVENBITS, timeout=None) as serial_conn:
         while True:
-			# Read until LF (0x0A)
+            # Read until LF (0x0A)
             msg = serial_conn.read_until(expected='\x0a'.encode('utf-8'), size=None)
             if len(msg) > 1:
                 #Decoding the message
@@ -93,7 +101,7 @@ if __name__ == "__main__":
                         if crc.to_bytes(4,byteorder='little',signed=False) == decoded_crc:
                             logger.debug("CRC check pass")
                             report = Message(decoded_msg)
-                            report_str = 'MEASUREMENT,'+str(report.timestamp)+","+report.src_addr.hex('-')+','
+                            report_str = ""
                             if hasattr(report, 'env_data'):
                                 try:
                                     report_str += str(report.env_data.room_temp)+','
@@ -107,7 +115,9 @@ if __name__ == "__main__":
                                     report_str += str(report.env_data.humidity)
                                 except AttributeError:
                                     pass
-                            logger.info(report_str)
+                                if len(report_str) > 2:
+                                    report_str = 'MEASUREMENT,'+str(report.timestamp)+","+report.src_addr.hex('-')+','+report_str
+                                    logger.info(report_str)
                         else:
                             logger.error("ERROR: CRC check failed")
                     except:

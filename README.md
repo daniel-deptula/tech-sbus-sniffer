@@ -47,6 +47,16 @@ Example:
 room     24,2  floor    26    humidity 58,8%
 temp     deg   temp     deg
 ```
+The controller replies to the regulator with an ACK message of the following structure:
+```
+ac ff ff ac 44 b5 cc 68
+^^^^^^^^^^^ ^^^^^^^^^^^
+const       CRC-32 of
+            the data
+            received
+            from regulator
+```
+
 ### Other values
 There're many other types of information transmitted but I didn't have time to analyse them / figure out what is what. I noticed for example date and time transmitted regularly by the central controller as follows:
 ```
