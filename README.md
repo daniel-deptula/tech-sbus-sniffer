@@ -32,7 +32,7 @@ The structure of the message:
 
 ## The data
 ### Temperature and humidity values
-One or multiple parameters can be included in one message. Three bytes mean the type of the parameter and are followed by two bytes with the value.
+One or multiple parameters can be included in one message. In messages sent from the sensor to the controller three bytes mean the type of the parameter and are followed by two bytes with the value.
 Types of parameters:
 * 04 00 00 - room temperature
 * 04 01 00 - floor temperature?
@@ -47,14 +47,31 @@ Example:
 room     24,2  floor    26    humidity 58,8%
 temp     deg   temp     deg
 ```
-The controller replies to the regulator with an ACK message of the following structure:
+
+### Commands
+When the target temperature is changed manually on the room sensor, it sends that information to the controller. Similarily, the controller can send updates about the target temperature to the sensor (for example when temperature change is required as per the configured schedule). The controller also updates the room sensor when heating of the room starts or stops. The command type is 3-byte long and the value is 4-byte long and they all start with 06 which may indicate the length (see above - the parameters that are shorter by 2 bytes start with 04).
+* 06 14 00 01 00 00 00 - heating started
+* 06 14 00 00 00 00 00 - heating stopped
+* 06 20 00 followed by 2 bytes indicating for how long the target temperature is set (in minutes) followed by 00 00 or ff ff ff ff (working according to the schedule)
+* 06 21 00 followed by 2 bytes indicating the target temperature followed by 00 00
+* 06 26 00 followed by 2 bytes indicating the time (or ff ff - schedule?) followed by 2 bytes indicating the target temperature (I'm not sure what's the difference between this paremeter and "06 20 00" & "06 21 00" - they seem to contain the same data / maybe some backward compatibility?)
+
+Example
+```
+06 14 00 01 00 00 00 06 20 00 3b 00 00 00 06 21 00 e6 00 00 00 06 26 00 3b 00 e6 00
+^^^^^^^  ^^^^^^^^^^^ ^^^^^^^^ ^^^^^^^^^^^ ^^^^^^^^ ^^^^^^^^^^^ ^^^^^^^^ ^^^^^^^^^^^
+heating  ON          time     59 minutes  target   23 degrees  time     59 minutes
+                                          temp                 & temp   23 degrees
+```
+
+### ACK
+A node that received a message replies to the sender with an ACK message of the following structure:
 ```
 ac ff ff ac 44 b5 cc 68
 ^^^^^^^^^^^ ^^^^^^^^^^^
 const       CRC-32 of
             the data
             received
-            from regulator
 ```
 
 ### Other values
@@ -68,14 +85,8 @@ There're many other types of information transmitted but I didn't have time to a
 
 # Script usage
 
-Once started, the script opens the serial port given as the first parameter and starts listening for the communication on the RS485 bus. The messages are saved to the log file specified as the second parameter. The default "debug" logging level logs all messages and a lot of details about the processing. The temperature and humidity values are logged with the "info" level in the following format (CSV):
-```
-type of data,unix timestamp (when data received),source device address,room temperature,floor temperature,humidity
-```
-Example:
-```
-MEASUREMENT,946700000.0300002,00-01-02-03,21.5,27.2,60.4
-```
+Once started, the script opens the serial port given as the first parameter and starts listening for the communication on the RS485 bus. The messages are saved to the log file specified as the second parameter. The default "debug" logging level logs all messages and a lot of details about the processing. The temperature and humidity values and commands are logged with the "info" level.
+
 Currently the only way to reduce the logging verbosity is to change the following piece of code:
 ```
 level=logging.DEBUG

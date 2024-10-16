@@ -8,38 +8,6 @@ import logging
 LOG_FORMAT = ('%(asctime)-15s %(levelname)-8s %(message)s')
 LOG_DATEFORMAT = ('%Y-%m-%d %H:%M:%S')
 
-class EnvData:
-    def __init__(self, msg):
-        self.msg = msg
-        self.read_data_from_msg()
-
-    def read_data_from_msg(self):
-        i = 0
-        while i+4 < len(self.msg):
-            if self.msg[i:i+4] == bytes([0xAC, 0xFF, 0xFF, 0xAC]):
-                # Controller's ACK (bytes 0xAC, 0xFF, 0xFF, 0xAC followed by CRC-32 of measurement data received from sensor)
-                if logger.getEffectiveLevel() <= logging.DEBUG:
-                    crc32 = ""
-                    if i+7 < len(self.msg):
-                        crc32 = self.msg[i+4:i+8].hex(' ')
-                    logger.debug("Controller's ACK. CRC32: " + crc32)
-                break
-            elif self.msg[i:i+3] == bytes([4, 0, 0]):
-                # Room temperature
-                self.room_temp = float(int.from_bytes(self.msg[i+3:i+5], byteorder='little', signed=False))/10
-                logger.debug("Room temperature: "+str(self.room_temp))
-            elif self.msg[i:i+3] == bytes([4, 1, 0]):
-                # Floor temperature
-                self.floor_temp = float(int.from_bytes(self.msg[i+3:i+5], byteorder='little', signed=False))/10
-                logger.debug("Floor temperature: "+str(self.floor_temp))
-            elif self.msg[i:i+3] == bytes([4, 2, 0]):
-                # Humidity
-                self.humidity = float(int.from_bytes(self.msg[i+3:i+5], byteorder='little', signed=False))/10
-                logger.debug("Humidity: "+str(self.humidity))
-            else:
-                # Unknown parameter
-                logger.debug('Unknown parameter: ' + self.msg[i:i+3].hex(' '))
-            i += 5
 
 class Message:
     def __init__(self, msg):
@@ -51,17 +19,123 @@ class Message:
         if len(self.msg) > 12:
             self.src_addr = self.msg[0:4]
             self.dst_addr = self.msg[6:10]
-            logger.debug('Msg from: ' + self.src_addr.hex('-') + " to: " + self.dst_addr.hex('-'))
+            self.src_addr_str = self.src_addr.hex('-')
+            self.dst_addr_str = self.dst_addr.hex('-')
+            self.fromto_header = self.src_addr.hex('-') + "->" + self.dst_addr.hex('-')
+            logger.debug('Msg from: ' + self.src_addr_str + " to: " + self.dst_addr_str)
 
             # I don't know what this value is
             self.smth1 = self.msg[4:6]
             self.smth2 = self.msg[10:12]
-            # But it's always set to 0x50 0x00 when environmental measurements data is sent
+            # But it's always set to 0x50 0x00 when environmental measurements or commands are sent
             if self.smth1 == bytes([0x50, 0]):
-                logger.debug('The message contains env data: ' + self.msg[12:].hex(' '))
-                self.env_data = EnvData(self.msg[12:])
+                logger.debug('The message (type1) data: ' + self.msg[12:].hex(' '))
+                self.data = self.msg[12:]
+                self.parse_data_from_msg()
+            # 0xE9 0xFD when timestamp is sent
+            elif self.smth1 == bytes([0xE9, 0xFD]):
+                logger.debug('The message (type2) data: ' + self.msg[12:].hex(' '))
+                self.data = self.msg[12:]
+                self.parse_data_from_msg()
+                
         else:
             logger.error("Message too short. Unable to parse.")
+            
+    def parse_data_from_msg(self):
+        if len(self.data) == 12 and self.data[0:4] == bytes([0x3F, 0xA1, 0x2E, 0xD0]):
+            # Timestamp
+            self.received_timestamp = int.from_bytes(self.data[4:12], byteorder='little', signed=False)
+            self.process_timestamp()
+        elif len(self.data) == 8 and self.data[0:4] == bytes([0xAC, 0xFF, 0xFF, 0xAC]):
+            # ACK (bytes 0xAC, 0xFF, 0xFF, 0xAC followed by CRC-32 of the data received from the other node)
+            if logger.getEffectiveLevel() <= logging.DEBUG:
+                crc32 = self.data[4:8].hex(' ')
+                logger.debug("ACK. CRC32 of the message acknowledged: " + crc32)
+        else:
+            i = 0
+            while i < len(self.data):
+                item_len = self.data[i]
+                if item_len > 0 and i+item_len < len(self.data):
+                    if self.data[i+1] == 0:
+                        # Room temperature
+                        self.room_temp = float(int.from_bytes(self.data[i+3:i+item_len+1], byteorder='little', signed=False))/10
+                        self.process_room_temperature()
+                    elif self.data[i+1] == 1:
+                        # Floor temperature
+                        self.floor_temp = float(int.from_bytes(self.data[i+3:i+item_len+1], byteorder='little', signed=False))/10
+                        self.process_floor_temperature()
+                    elif self.data[i+1] == 2:
+                        # Humidity
+                        self.humidity = float(int.from_bytes(self.data[i+3:i+item_len+1], byteorder='little', signed=False))/10
+                        self.process_humidity()
+                    elif self.data[i+1] == 0x14:
+                        # Heating start/stop
+                        self.heating = int.from_bytes(self.data[i+3:i+item_len+1], byteorder='little', signed=False)
+                        self.process_heating()
+                    elif self.data[i+1] == 0x20:
+                        # Target temperature for how long
+                        self.target_temp_time = int.from_bytes(self.data[i+3:i+item_len+1], byteorder='little', signed=False)
+                        self.process_target_temp_time()
+                    elif self.data[i+1] == 0x21:
+                        # Target temperature
+                        self.target_temp = float(int.from_bytes(self.data[i+3:i+item_len+1], byteorder='little', signed=False))/10
+                        self.process_target_temp()
+                    elif self.data[i+1] == 0x26 and item_len == 6:
+                        # Time + target temperature (what's the purpose of it?!)
+                        self.target_temp_time2 = int.from_bytes(self.data[i+3:i+5], byteorder='little', signed=False)
+                        self.target_temp2 = float(int.from_bytes(self.data[i+5:i+7], byteorder='little', signed=False))/10
+                        self.process_target_temp2()
+                    else:
+                        # Unknown parameter
+                        logger.debug(self.fromto_header+",Unknown parameter: " + hex(self.data[i+1]))
+                else:
+                    # Something not supported
+                    logger.debug(self.fromto_header+",Unsupported data: " + self.data.hex(' '))
+                i += (item_len+1)
+
+    def process_room_temperature(self):
+        logger.info(self.fromto_header+",room temperature,"+str(self.room_temp))
+    
+    def process_floor_temperature(self):
+        logger.info(self.fromto_header+",floor temperature,"+str(self.floor_temp))
+        
+    def process_humidity(self):
+        logger.info(self.fromto_header+",humidity,"+str(self.humidity))
+        
+    def process_heating(self):
+        if self.heating == 1:
+            heating_str = "ON"
+        elif self.heating == 0:
+            heating_str = "OFF"
+        else:
+            heating_str = "!! " + str(self.heating)
+        logger.info(self.fromto_header+",heating,"+heating_str)
+            
+    def process_target_temp_time(self):
+        if self.target_temp_time == 0xFFFFFFFF:
+            time_str = "OFF"
+        else:
+            time_str = str(self.target_temp_time)
+        logger.info(self.fromto_header+",target temperature time,"+time_str)
+    
+    def process_target_temp(self):
+        logger.info(self.fromto_header+",target temperature,"+str(self.target_temp))
+        
+    def process_target_temp2(self):
+        if self.target_temp_time2 == 0xFFFF:
+            time_str = "OFF"
+        else:
+            time_str = str(self.target_temp_time2)
+        logger.info(self.fromto_header+",target temperature (2),"+str(self.target_temp2))
+        logger.info(self.fromto_header+",target temperature time (2),"+time_str)
+        
+    def process_timestamp(self):
+        my_timestamp = int(self.timestamp)
+        tzoffset = time.localtime(my_timestamp).tm_gmtoff
+        delta = my_timestamp + tzoffset - self.received_timestamp
+        logger.info(self.fromto_header+",timestamp,"+str(self.received_timestamp)+","+str(delta))
+    
+    
 
 if __name__ == "__main__":
     try:
@@ -100,28 +174,11 @@ if __name__ == "__main__":
                         crc = binascii.crc32(decoded_msg)
                         if crc.to_bytes(4,byteorder='little',signed=False) == decoded_crc:
                             logger.debug("CRC check pass")
-                            report = Message(decoded_msg)
-                            report_str = ""
-                            if hasattr(report, 'env_data'):
-                                try:
-                                    report_str += str(report.env_data.room_temp)+','
-                                except AttributeError:
-                                    report_str += ','
-                                try:
-                                    report_str += str(report.env_data.floor_temp)+','
-                                except AttributeError:
-                                    report_str += ','
-                                try:
-                                    report_str += str(report.env_data.humidity)
-                                except AttributeError:
-                                    pass
-                                if len(report_str) > 2:
-                                    report_str = 'MEASUREMENT,'+str(report.timestamp)+","+report.src_addr.hex('-')+','+report_str
-                                    logger.info(report_str)
+                            Message(decoded_msg)
                         else:
                             logger.error("ERROR: CRC check failed")
-                    except:
-                        logger.error("ERROR: Unable to decode")
+                    except Exception as e:
+                        logger.error("ERROR: Unable to decode: " + repr(e))
                 else:
                     logger.error("ERROR: Message too short: " + str(len(strmsg)))
     sys.exit(0)
