@@ -1,5 +1,7 @@
 # tech-sbus-sniffer
-RS485 sniffer and parser of the Tech SBUS protocol
+RS485 sniffer and parser of the Tech SBUS protocol.\
+\
+**!!! The script is longer maintained in favour of a MQTT/HA version - [tech-sbus-mqtt](https://github.com/daniel-deptula/tech-sbus-mqtt).**
 
 # Overview
 TECH SBUS is a name used by vendor "Tech Sterowniki" for a custom communication protocol over RS-485, most probably developed by them. The protocol is used by their products - room sensors/regulators and central heating actuator controllers.
@@ -103,6 +105,6 @@ level=logging.INFO
                                         device
 ```
 ## Serial devices
-I used USB RS485 serial interfaces with the following chips and they both work fine:
-- FT232RL
-- CH341
+I used USB RS485 serial interfaces with the following chips:
+- CH341 (very stable)
+- FT232RL (sometimes hung)
